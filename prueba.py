@@ -2,105 +2,319 @@ import tkinter as tk
 from tkinter import filedialog
 import cv2
 from PIL import Image, ImageTk
+import os
 
 class Etiquetador:
     def __init__(self, root):
         self.root = root
         self.root.title("Etiquetador IA")
+        root.geometry("800x600")
 
-        # Frame para los botones
+        # Frame de leyenda
+        self.frame_leyenda = tk.Frame(root, bg="lightgray", padx=10, pady=5)
+        self.frame_leyenda.pack(side="top", fill="x")
+
+        leyenda_text = (
+            "Q: Clase 0 (Roja) | W: Clase 1 (Azul) | E: Clase 2 (Verde) | R: Clase 3 (Amarilla) | "
+            "C: Cambiar clase rect. seleccionado | Delete: Eliminar rect. | "
+            "A: Anterior | D: Siguiente | Click Der: Seleccionar rect."
+        )
+        tk.Label(self.frame_leyenda, text=leyenda_text, bg="lightgray", font=("Arial", 9), wraplength=800, justify="left").pack()
+
         self.frame_botones = tk.Frame(root)
-        self.frame_botones.pack(side="top", fill="x")
+        self.frame_botones.pack(side="top", fill="x", pady=10)
 
-        self.btn_cargar = tk.Button(self.frame_botones, text="Cargar Imagen", command=self.cargar_imagen)
+        self.btn_cargar = tk.Button(self.frame_botones, text="Cargar Imágenes", command=self.cargar_imagenes)
         self.btn_cargar.pack(side="left", padx=5, pady=5)
 
-        self.btn_guardar = tk.Button(self.frame_botones, text="Guardar YOLO", command=self.guardar)
+        self.btn_guardar = tk.Button(self.frame_botones, text="Guardar YOLO", command=self.guardar_actual)
         self.btn_guardar.pack(side="left", padx=5, pady=5)
 
-        # Canvas para la imagen
         self.canvas = tk.Canvas(root, cursor="cross")
         self.canvas.pack(fill="both", expand=True)
 
         self.canvas.bind("<ButtonPress-1>", self.iniciar_rect)
         self.canvas.bind("<B1-Motion>", self.dibujar_rect)
         self.canvas.bind("<ButtonRelease-1>", self.finalizar_rect)
+        self.canvas.bind("<Button-3>", self.seleccionar_rect)  # Click derecho
 
-        self.img = None
-        self.tk_img = None
+        self.root.bind("a", self.tecla_anterior)
+        self.root.bind("d", self.tecla_siguiente)
+        self.clase_actual = 0
+        self.root.bind("q", lambda e: self.cambiar_clase(0))
+        self.root.bind("w", lambda e: self.cambiar_clase(1))
+        self.root.bind("e", lambda e: self.cambiar_clase(2))
+        self.root.bind("r", lambda e: self.cambiar_clase(3))
+        self.root.bind("k", self.eliminar_seleccionado)
+        self.root.bind("Delete", self.eliminar_seleccionado)
+        self.root.bind("c", self.cambiar_clase_seleccionado)
+
+        self.imagenes = []
+        self.rutas = []
+        self.tk_imagenes = []
+        self.boxes_por_imagen = []
+        self.indice = 0
         self.rect = None
         self.start_x = None
         self.start_y = None
-        self.boxes = []
+        self.rect_seleccionado = None
+        self.editando = False
+        self.resize_mode = None  # "move", "resize_nw", "resize_ne", "resize_sw", "resize_se"
 
-    def cargar_imagen(self):
-        ruta = filedialog.askopenfilename()
-        if not ruta:
+    def seleccionar_rect(self, event):
+        if not self.imagenes:
             return
+        
+        # Buscar si hay un rectángulo en esta posición
+        encontrado = False
+        for i, box in enumerate(self.boxes_por_imagen[self.indice]):
+            x1, y1, x2, y2, clase = box
+            # Verificar si el click está dentro del rectángulo
+            if x1 <= event.x <= x2 and y1 <= event.y <= y2:
+                self.rect_seleccionado = i
+                self.editando = True
+                self.start_x = event.x
+                self.start_y = event.y
+                
+                # Detectar modo de redimensionamiento (esquinas)
+                if abs(event.x - x1) < 10 and abs(event.y - y1) < 10:
+                    self.resize_mode = "resize_nw"
+                elif abs(event.x - x2) < 10 and abs(event.y - y1) < 10:
+                    self.resize_mode = "resize_ne"
+                elif abs(event.x - x1) < 10 and abs(event.y - y2) < 10:
+                    self.resize_mode = "resize_sw"
+                elif abs(event.x - x2) < 10 and abs(event.y - y2) < 10:
+                    self.resize_mode = "resize_se"
+                else:
+                    self.resize_mode = "move"
+                
+                encontrado = True
+                self.mostrar_imagen()
+                return
+        
+        if not encontrado:
+            self.rect_seleccionado = None
+            self.editando = False
+            self.mostrar_imagen()
 
+    def iniciar_rect(self, event):
+        if not self.imagenes or self.editando:
+            return
+        self.start_x = min(max(event.x, 0), self.tk_imagenes[self.indice].width())
+        self.start_y = min(max(event.y, 0), self.tk_imagenes[self.indice].height())
+        colores = ["red", "blue", "green", "yellow"]
+        self.rect = self.canvas.create_rectangle(
+            self.start_x, self.start_y,
+            self.start_x, self.start_y,
+            outline=colores[self.clase_actual], width=2
+        )
+
+    def dibujar_rect(self, event):
+        if self.editando and self.rect_seleccionado is not None:
+            # Modo edición de rectángulo existente
+            box = self.boxes_por_imagen[self.indice][self.rect_seleccionado]
+            x1, y1, x2, y2, clase = box
+            
+            dx = event.x - self.start_x
+            dy = event.y - self.start_y
+            
+            if self.resize_mode == "move":
+                x1 = min(max(x1 + dx, 0), self.tk_imagenes[self.indice].width())
+                y1 = min(max(y1 + dy, 0), self.tk_imagenes[self.indice].height())
+                x2 = min(max(x2 + dx, 0), self.tk_imagenes[self.indice].width())
+                y2 = min(max(y2 + dy, 0), self.tk_imagenes[self.indice].height())
+            elif self.resize_mode == "resize_nw":
+                x1 = min(max(event.x, 0), x2 - 10)
+                y1 = min(max(event.y, 0), y2 - 10)
+            elif self.resize_mode == "resize_ne":
+                x2 = min(max(event.x, x1 + 10), self.tk_imagenes[self.indice].width())
+                y1 = min(max(event.y, 0), y2 - 10)
+            elif self.resize_mode == "resize_sw":
+                x1 = min(max(event.x, 0), x2 - 10)
+                y2 = min(max(event.y, y1 + 10), self.tk_imagenes[self.indice].height())
+            elif self.resize_mode == "resize_se":
+                x2 = min(max(event.x, x1 + 10), self.tk_imagenes[self.indice].width())
+                y2 = min(max(event.y, y1 + 10), self.tk_imagenes[self.indice].height())
+            
+            self.boxes_por_imagen[self.indice][self.rect_seleccionado] = (x1, y1, x2, y2, clase)
+            self.start_x = event.x
+            self.start_y = event.y
+            self.mostrar_imagen()
+            
+        elif self.rect:
+            x = min(max(event.x, 0), self.tk_imagenes[self.indice].width())
+            y = min(max(event.y, 0), self.tk_imagenes[self.indice].height())
+            self.canvas.coords(self.rect, self.start_x, self.start_y, x, y)
+            if hasattr(self, "temp_text") and self.temp_text:
+                self.canvas.delete(self.temp_text)
+            self.temp_text = self.canvas.create_text(self.start_x + 5, self.start_y + 5,
+                                                 text=str(self.clase_actual),
+                                                 anchor="nw",
+                                                 fill=["red","blue","green","yellow"][self.clase_actual],
+                                                 font=("Arial", 12, "bold"))
+            self.canvas.itemconfig(self.rect, outline=["red","blue","green","yellow"][self.clase_actual])
+
+    def finalizar_rect(self, event):
+        if self.editando:
+            self.editando = False
+            # NO pongas: self.rect_seleccionado = None
+            # Así el rectángulo sigue seleccionado para más ediciones
+            self.resize_mode = None
+            self.mostrar_imagen()
+            return
+            
+        if self.rect:
+            x = min(max(event.x, 0), self.tk_imagenes[self.indice].width())
+            y = min(max(event.y, 0), self.tk_imagenes[self.indice].height())
+
+            x1 = min(self.start_x, x)
+            y1 = min(self.start_y, y)
+            x2 = max(self.start_x, x)
+            y2 = max(self.start_y, y)
+
+            self.boxes_por_imagen[self.indice].append((x1, y1, x2, y2, self.clase_actual))
+            print(f"Imagen {self.indice+1} - Bounding box:", x1, y1, x2, y2)
+
+            self.rect = None
+            self.temp_text = None
+            self.mostrar_imagen()
+
+    def eliminar_seleccionado(self, event=None):
+        if self.rect_seleccionado is not None:
+            self.boxes_por_imagen[self.indice].pop(self.rect_seleccionado)
+            self.rect_seleccionado = None
+            self.editando = False
+            self.resize_mode = None
+            print(f"Rectángulo eliminado")
+            self.mostrar_imagen()
+        else:
+            print("Selecciona un rectángulo primero (click derecho)")
+
+    def cambiar_clase_seleccionado(self, event=None):
+        if self.rect_seleccionado is not None:
+            box = self.boxes_por_imagen[self.indice][self.rect_seleccionado]
+            x1, y1, x2, y2, clase = box
+            nueva_clase = (clase + 1) % 4
+            self.boxes_por_imagen[self.indice][self.rect_seleccionado] = (x1, y1, x2, y2, nueva_clase)
+            print(f"Clase del rectángulo cambiada a: {nueva_clase}")
+            self.mostrar_imagen()
+        else:
+            print("Selecciona un rectángulo primero (click derecho)")
+
+    def mostrar_imagen(self):
         self.canvas.delete("all")
-        self.boxes.clear()
+        if not self.imagenes:
+            return
+        self.canvas.config(width=self.tk_imagenes[self.indice].width(),
+                           height=self.tk_imagenes[self.indice].height())
+        self.canvas.create_image(0, 0, anchor="nw", image=self.tk_imagenes[self.indice])
 
-        self.img = cv2.imread(ruta)
-        self.img = cv2.cvtColor(self.img, cv2.COLOR_BGR2RGB)
+        colores = ["red", "blue", "green", "yellow"]
+
+        for i, box in enumerate(self.boxes_por_imagen[self.indice]):
+            x1, y1, x2, y2, clase = box
+            # Resaltar si está seleccionado
+            width = 4 if i == self.rect_seleccionado else 2
+            self.canvas.create_rectangle(x1, y1, x2, y2,
+                                        outline=colores[clase],
+                                        width=width)
+            self.canvas.create_text(x1 + 5, y1 + 5,
+                                   text=str(clase),
+                                   anchor="nw",
+                                   fill=colores[clase],
+                                   font=("Arial", 12, "bold"))
+
+        self.root.title(f"Etiquetador IA - Imagen {self.indice+1}/{len(self.imagenes)}")
+
+    def cambiar_clase(self, clase):
+        self.clase_actual = clase
+        
+        # Si hay un rectángulo seleccionado, también cambiar su clase
+        if self.rect_seleccionado is not None:
+            box = self.boxes_por_imagen[self.indice][self.rect_seleccionado]
+            x1, y1, x2, y2, _ = box
+            self.boxes_por_imagen[self.indice][self.rect_seleccionado] = (x1, y1, x2, y2, clase)
+            self.mostrar_imagen()
+        
+        print(f"Clase actual: {self.clase_actual}")
+
+    def cargar_imagenes(self):
+        rutas = filedialog.askopenfilenames(title="Selecciona hasta 5 imágenes")
+        if not rutas:
+            return
+        rutas = rutas[:5]
+
+        self.imagenes.clear()
+        self.tk_imagenes.clear()
+        self.boxes_por_imagen.clear()
+        self.rutas = rutas
+        self.indice = 0
+
+        for ruta in rutas:
+            img = cv2.imread(ruta)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            self.imagenes.append(img)
+            self.tk_imagenes.append(ImageTk.PhotoImage(Image.fromarray(img)))
+            self.boxes_por_imagen.append([])
 
         self.mostrar_imagen()
 
     def mostrar_imagen(self):
-        img_pil = Image.fromarray(self.img)
-        self.tk_img = ImageTk.PhotoImage(img_pil)
-
-        self.canvas.config(width=self.tk_img.width(), height=self.tk_img.height())
-        self.canvas.create_image(0, 0, anchor="nw", image=self.tk_img)
-
-    def iniciar_rect(self, event):
-        if self.img is None:
+        self.canvas.delete("all")
+        if not self.imagenes:
             return
+        self.canvas.config(width=self.tk_imagenes[self.indice].width(),
+                           height=self.tk_imagenes[self.indice].height())
+        self.canvas.create_image(0, 0, anchor="nw", image=self.tk_imagenes[self.indice])
 
-        self.start_x = event.x
-        self.start_y = event.y
+        colores = ["red", "blue", "green", "yellow"]
 
-        self.rect = self.canvas.create_rectangle(
-            self.start_x, self.start_y,
-            self.start_x, self.start_y,
-            outline="red", width=2
-        )
+        for i, box in enumerate(self.boxes_por_imagen[self.indice]):
+            x1, y1, x2, y2, clase = box
+            # Resaltar si está seleccionado
+            width = 4 if i == self.rect_seleccionado else 2
+            self.canvas.create_rectangle(x1, y1, x2, y2,
+                                        outline=colores[clase],
+                                        width=width)
+            self.canvas.create_text(x1 + 5, y1 + 5,
+                                   text=str(clase),
+                                   anchor="nw",
+                                   fill=colores[clase],
+                                   font=("Arial", 12, "bold"))
 
-    def dibujar_rect(self, event):
-        if self.rect:
-            self.canvas.coords(self.rect,
-                               self.start_x, self.start_y,
-                               event.x, event.y)
+        self.root.title(f"Etiquetador IA - Imagen {self.indice+1}/{len(self.imagenes)}")
 
-    def finalizar_rect(self, event):
-        if self.rect:
-            x1 = min(self.start_x, event.x)
-            y1 = min(self.start_y, event.y)
-            x2 = max(self.start_x, event.x)
-            y2 = max(self.start_y, event.y)
-
-            self.boxes.append((x1, y1, x2, y2))
-            print("Bounding box:", x1, y1, x2, y2)
-
-            self.rect = None
-
-    def guardar(self):
-        if not self.img:
+    def guardar_actual(self):
+        if not self.imagenes:
             return
-        ruta_txt = filedialog.asksaveasfilename(defaultextension=".txt")
-        if ruta_txt:
-            self.guardar_yolo(ruta_txt)
+        ruta_img = self.rutas[self.indice]
+        ruta_txt = os.path.splitext(ruta_img)[0] + ".txt"
+        self.guardar_yolo(ruta_txt, self.imagenes[self.indice], self.boxes_por_imagen[self.indice])
+        print(f"Guardado: {ruta_txt}")
 
-    def guardar_yolo(self, ruta_txt):
-        h, w, _ = self.img.shape
+    def guardar_yolo(self, ruta_txt, img, boxes):
+        h, w, _ = img.shape
         with open(ruta_txt, "w") as f:
-            for box in self.boxes:
-                x1, y1, x2, y2 = box
+            for box in boxes:
+                x1, y1, x2, y2, clase = box
                 x_center = ((x1 + x2) / 2) / w
                 y_center = ((y1 + y2) / 2) / h
                 width = (x2 - x1) / w
                 height = (y2 - y1) / h
-                f.write(f"0 {x_center} {y_center} {width} {height}\n")
+                f.write(f"{clase} {x_center} {y_center} {width} {height}\n")
+
+    def tecla_siguiente(self, event=None):
+        if self.indice < len(self.imagenes) - 1:
+            self.guardar_actual()
+            self.indice += 1
+            self.mostrar_imagen()
+
+    def tecla_anterior(self, event=None):
+        if self.indice > 0:
+            self.guardar_actual()
+            self.indice -= 1
+            self.mostrar_imagen()
+
 
 root = tk.Tk()
 app = Etiquetador(root)
