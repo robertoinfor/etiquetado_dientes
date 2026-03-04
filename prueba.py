@@ -224,7 +224,8 @@ class Etiquetador:
                                    fill=colores[clase],
                                    font=("Arial", 12, "bold"))
 
-        self.root.title(f"Etiquetador IA - Imagen {self.indice+1}/{len(self.imagenes)}")
+        nombre_imagen = os.path.basename(self.rutas[self.indice]) if self.rutas else "Sin imagen"
+        self.root.title(f"Etiquetador IA - {nombre_imagen} ({self.indice+1}/{len(self.imagenes)})")
 
     def cambiar_clase(self, clase):
         self.clase_actual = clase
@@ -252,7 +253,20 @@ class Etiquetador:
 
         for ruta in rutas:
             img = cv2.imread(ruta)
+            if img is None:
+                print(f"Error: No se pudo cargar la imagen {ruta}")
+                continue
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            
+            # Redimensionar para que quepa en la ventana sin zoom excesivo
+            h, w = img.shape[:2]
+            max_w, max_h = 750, 450  # Máximo disponible en el canvas
+            escala = min(max_w/w, max_h/h, 1.0)
+            if escala < 1.0:
+                nuevo_w = int(w * escala)
+                nuevo_h = int(h * escala)
+                img = cv2.resize(img, (nuevo_w, nuevo_h))
+            
             self.imagenes.append(img)
             self.tk_imagenes.append(ImageTk.PhotoImage(Image.fromarray(img)))
             self.boxes_por_imagen.append([])
@@ -282,7 +296,8 @@ class Etiquetador:
                                    fill=colores[clase],
                                    font=("Arial", 12, "bold"))
 
-        self.root.title(f"Etiquetador IA - Imagen {self.indice+1}/{len(self.imagenes)}")
+        nombre_imagen = os.path.basename(self.rutas[self.indice]) if self.rutas else "Sin imagen"
+        self.root.title(f"Etiquetador IA - {nombre_imagen} ({self.indice+1}/{len(self.imagenes)})")
 
     def guardar_actual(self):
         if not self.imagenes:
