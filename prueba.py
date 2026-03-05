@@ -15,7 +15,7 @@ class Etiquetador:
         self.frame_leyenda.pack(side="top", fill="x")
 
         leyenda_text = (
-            "Q: Clase 0 (Roja) | W: Clase 1 (Azul) | E: Clase 2 (Verde) | R: Clase 3 (Amarilla) | "
+            "U: Deshacer último rect. | Q: Clase 0 (Roja) | W: Clase 1 (Azul) | E: Clase 2 (Verde) | R: Clase 3 (Amarilla) | "
             "C: Cambiar clase rect. seleccionado | Delete: Eliminar rect. | "
             "A: Anterior | D: Siguiente | Click Der: Seleccionar rect."
         )
@@ -48,7 +48,7 @@ class Etiquetador:
         self.root.bind("k", self.eliminar_seleccionado)
         self.root.bind("Delete", self.eliminar_seleccionado)
         self.root.bind("c", self.cambiar_clase_seleccionado)
-
+        self.root.bind("u", self.deshacer)
         self.imagenes = []
         self.rutas = []
         self.tk_imagenes = []
@@ -201,31 +201,13 @@ class Etiquetador:
         else:
             print("Selecciona un rectángulo primero (click derecho)")
 
-    def mostrar_imagen(self):
-        self.canvas.delete("all")
-        if not self.imagenes:
-            return
-        self.canvas.config(width=self.tk_imagenes[self.indice].width(),
-                           height=self.tk_imagenes[self.indice].height())
-        self.canvas.create_image(0, 0, anchor="nw", image=self.tk_imagenes[self.indice])
-
-        colores = ["red", "blue", "green", "yellow"]
-
-        for i, box in enumerate(self.boxes_por_imagen[self.indice]):
-            x1, y1, x2, y2, clase = box
-            # Resaltar si está seleccionado
-            width = 4 if i == self.rect_seleccionado else 2
-            self.canvas.create_rectangle(x1, y1, x2, y2,
-                                        outline=colores[clase],
-                                        width=width)
-            self.canvas.create_text(x1 + 5, y1 + 5,
-                                   text=str(clase),
-                                   anchor="nw",
-                                   fill=colores[clase],
-                                   font=("Arial", 12, "bold"))
-
-        nombre_imagen = os.path.basename(self.rutas[self.indice]) if self.rutas else "Sin imagen"
-        self.root.title(f"Etiquetador IA - {nombre_imagen} ({self.indice+1}/{len(self.imagenes)})")
+    def deshacer(self, event=None):
+        if self.boxes_por_imagen[self.indice]:
+            self.boxes_por_imagen[self.indice].pop()
+            self.mostrar_imagen()
+            print("Último rectángulo deshecho")
+        else:
+            print("No hay rectángulos para deshacer")
 
     def cambiar_clase(self, clase):
         self.clase_actual = clase
@@ -305,6 +287,7 @@ class Etiquetador:
         ruta_img = self.rutas[self.indice]
         ruta_txt = os.path.splitext(ruta_img)[0] + ".txt"
         self.guardar_yolo(ruta_txt, self.imagenes[self.indice], self.boxes_por_imagen[self.indice])
+        self.guardar_imagen_editada()
         print(f"Guardado: {ruta_txt}")
 
     def guardar_yolo(self, ruta_txt, img, boxes):
@@ -317,6 +300,25 @@ class Etiquetador:
                 width = (x2 - x1) / w
                 height = (y2 - y1) / h
                 f.write(f"{clase} {x_center} {y_center} {width} {height}\n")
+
+    def guardar_imagen_editada(self):
+        if not self.imagenes:
+            return
+        ruta_img = self.rutas[self.indice]
+        ruta_salida = os.path.splitext(ruta_img)[0] + "_editada.jpg"
+        
+        img = self.imagenes[self.indice].copy()
+        colores_bgr = [(0, 0, 255), (255, 0, 0), (0, 255, 0), (0, 255, 255)]  # BGR para OpenCV
+        
+        for box in self.boxes_por_imagen[self.indice]:
+            x1, y1, x2, y2, clase = box
+            color = colores_bgr[clase]
+            cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(img, str(clase), (x1 + 5, y1 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+        
+        img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        cv2.imwrite(ruta_salida, img_bgr)
+        print(f"Imagen editada guardada: {ruta_salida}")
 
     def tecla_siguiente(self, event=None):
         if self.indice < len(self.imagenes) - 1:
