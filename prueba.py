@@ -288,6 +288,7 @@ class Etiquetador:
         ruta_txt = os.path.splitext(ruta_img)[0] + ".txt"
         self.guardar_yolo(ruta_txt, self.imagenes[self.indice], self.boxes_por_imagen[self.indice])
         self.guardar_imagen_editada()
+        self.guardar_crops_por_clase()
         print(f"Guardado: {ruta_txt}")
 
     def guardar_yolo(self, ruta_txt, img, boxes):
@@ -319,6 +320,37 @@ class Etiquetador:
         img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
         cv2.imwrite(ruta_salida, img_bgr)
         print(f"Imagen editada guardada: {ruta_salida}")
+
+    def guardar_crops_por_clase(self):
+        if not self.imagenes:
+            return
+        
+        # Directorio base donde irán las carpetas de clases
+        ruta_img = self.rutas[self.indice]
+        directorio_base = os.path.dirname(ruta_img)
+        nombre_imagen = os.path.splitext(os.path.basename(ruta_img))[0]
+        
+        # Crear carpetas para cada clase si no existen
+        for clase in range(4):
+            ruta_clase = os.path.join(directorio_base, str(clase))
+            os.makedirs(ruta_clase, exist_ok=True)
+        
+        # Guardar cada crop en su carpeta correspondiente
+        img = self.imagenes[self.indice]
+        for idx, box in enumerate(self.boxes_por_imagen[self.indice]):
+            x1, y1, x2, y2, clase = box
+            
+            # Extraer el recorte (crop)
+            crop = img[y1:y2, x1:x2]
+            
+            # Crear nombre del archivo basado en la imagen original e índice del box
+            nombre_crop = f"{nombre_imagen}_box{idx}.jpg"
+            ruta_crop = os.path.join(directorio_base, str(clase), nombre_crop)
+            
+            # Guardar el crop en formato BGR para OpenCV
+            crop_bgr = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
+            cv2.imwrite(ruta_crop, crop_bgr)
+            print(f"Crop guardado: {ruta_crop}")
 
     def tecla_siguiente(self, event=None):
         if self.indice < len(self.imagenes) - 1:
